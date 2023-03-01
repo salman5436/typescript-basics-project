@@ -5,7 +5,8 @@ import { loadConfig } from './app-config'
 const app = express()
 const config = loadConfig()!
 
-//Typing StationCache here which is used by second API endpoint(for stopid):
+//Typing StationCache here which is used by second API endpoint(for stopId):
+//stationCaches uses a JavaScript Map: it accepts 2 parameters, a key (a number/string/symbol) & StopResponse is the interface from the API that we'll call
 const stationCache = new Map<string, StopResponse['ResponseData']>()
 
 
@@ -36,28 +37,28 @@ interface TransportInfo {
 
 interface StationInfo {
     ResponseData: {
-      LatestUpdate: string
-      DataAge: number
-      Metros: TransportInfo[]
-      Buses: TransportInfo[]
-      Trains: TransportInfo[]
-      Trams: TransportInfo[]
-      Ships: TransportInfo[]
-      StopPointDeviations: {
-        StopInfo: {
-          StopAreaNumber: number
-          StopAreaName: string
-          TransportMode: string
-          GroupOfLine: string
+        LatestUpdate: string
+        DataAge: number
+        Metros: TransportInfo[]
+        Buses: TransportInfo[]
+        Trains: TransportInfo[]
+        Trams: TransportInfo[]
+        Ships: TransportInfo[]
+        StopPointDeviations: {
+            StopInfo: {
+                StopAreaNumber: number
+                StopAreaName: string
+                TransportMode: string
+                GroupOfLine: string
+            }
+            Deviation: Deviation
         }
-        Deviation: Deviation
-      }
     }
-  }
+}
 
-  
 
-  //creating new interface for StopResponse, which is used by second API call for stopID:
+
+//creating new interface for StopResponse, which is used by second API call for stopID:
 interface StopResponse {
     StatusCode: number
     Message: null
@@ -69,7 +70,7 @@ interface StopResponse {
         X: string
         Y: string
         Products: null
-    }
+    }[]
 }
 
 export enum Type {
@@ -93,7 +94,7 @@ app.get('/times/:stationId', async (req, res, next) => {
             stationId,
             results: data.ResponseData
         })
-    } catch(err) {
+    } catch (err) {
         // if(err instanceof ZodError) {
         //     res.status(422).send('Invalid Station ID')
         // }
@@ -101,29 +102,44 @@ app.get('/times/:stationId', async (req, res, next) => {
     }
 })
 
-app.get('/stations', async(req: Request<never, any, never, {q: string}>, res, next) => {
+app.get('/stations', async (req: Request<never, any, never, { q: string }>, res, next) => {
     try {
-       const schema = z.object({ q: z.string() })
-       const { q } = schema.parse(req.query)
+        //Actual Endpoint will be '/stations?q=[insertQueryHere]' that we'll pass along to our URL
+        const schema = z.object({ q: z.string() })
+        const { q } = schema.parse(req.query)
 
+        //stationCache is created to make things faster since station names don't change often in our search
+        //So, we don't have to go to the API everytime, we can just cache what we already know
+        //Simple caching strategy that will disappear if you restart (next level would be to use cache or database) 
+        if (stationCache.has(q)) {
+            return res.json({
+                query: q,
+                results: stationCache.get(q)
+            })
+        }
 
-       if(stationCache.has(q)) {
-        return res.json({
+        const apiCall = await fetch(`${config.apiUrl}/typeahead.json?key=${config.stopLookupApiKey}&searchstring=${q}&stationsonly=true&maxresults=10`)
+        const stations: StopResponse = await apiCall.json()
+        stationCache.set(q, stations.ResponseData)
+
+        res.json({
             query: q,
-            results: stationCache.get(q)
+            results: stations.ResponseData,
         })
-       }
-
-       const apiCall = await fetch(`${config.apiUrl}/typeahead.json?key=${config.stopLookupApiKey}&searchstring=${q}&stationsonly=true&maxresults=10`)
-       const stations: StopResponse = await apiCall.json()
-       stationCache.set(q, stations.ResponseData)
-
-       res.json({
-        query: q,
-        results: stations.ResponseData,
-       })
-    } catch(err) {
+    } catch (err) {
         next(err)
+    }
+})
+
+//Middleware function that runs in correspondence with the next function (this is an error handler)
+//err has to be typed any because we don't know what type the error will be
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    if (err instanceof ZodError) {
+        res.status(422).json({
+            message: err.message,
+            errors: err.errors,
+            cause: err.issues,
+        })
     }
 })
 
